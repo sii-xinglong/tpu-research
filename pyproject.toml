@@ -1,0 +1,14 @@
+[project]
+name = "tpu-research"
+version = "0.1.0"
+authors = [
+  { name = "xinglong", email = "xinglong940713@gmail.com" },
+]
+description = "A collection of tpu experiments."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jax",
+    "jaxlib",
+    "libtpu",
+]

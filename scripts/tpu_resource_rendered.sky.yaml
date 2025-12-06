@@ -1,0 +1,14 @@
+# Launch TPU resources for development with SkyPilot command:
+#   sky launch tpu_resource.sky.yaml
+workdir: .
+
+resources:
+  accelerators: tpu-v6e-1
+  accelerator_args:
+      tpu_vm: True
+      runtime_version: v2-alpha-tpuv6e
+  use_spot: True # The default instance is spot.
+
+setup: |
+  uv venv --python 3.12
+  source .venv/bin/activate

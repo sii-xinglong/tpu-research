@@ -56,7 +56,7 @@ sed -e "s|\$ACCELERATOR|${ACCELERATOR}|g" \
     "${SCRIPT_DIR}/tpu_resource.sky.yaml" > "$TEMP_YAML"
 
 # Create cluster name with ref
-CLUSTER_NAME="bonsai-$ACCELERATOR-$SANITIZED_NAME-$RANDOM"
+CLUSTER_NAME="tpu-$ACCELERATOR-$SANITIZED_NAME-$RANDOM"
 
 # Save cluster name to file for other scripts to use
 echo "$CLUSTER_NAME" > "${SCRIPT_DIR}/../.cluster_name"

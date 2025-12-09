@@ -4,6 +4,8 @@ This project provides tools to benchmark Matrix Multiplication (Matmul) operatio
 
 **Conclusion:** The matrix padding strategy follows an (8, 128) alignment, meaning the first dimension aligns to a multiple of 8 and the second to a multiple of 128. For the weight matrix (the right-hand side of the matmul), it is ultimately fixed onto the MXU in the form of multiple (256, 256) blocks. For the data matrix, it enters the MXU for calculation as (8, 128) blocks after padding. In M, N, K matrix multiplication, padding in N and K severely degrades performance, whereas the performance loss from padding M is minimal. Additionally, observing the benchmark timings reveals that, given a weight matrix of (256, 256), increasing M helps improve computational efficiency (where computation time exceeds other overheads).
 
+Further observations indicate that changing the weight matrix from (256, 256) to (256, 512) results in a linear increase in latency, implying that it does not leverage two MXUs in parallel. Moreover, for weight matrices of shape (128, 256) or (256, 128), the latency is remarkably close to that of (256, 256) when M is large.
+
 ## Benchmarking Tool: `bench.py`
 
 The core script `bench.py` executes a custom Pallas kernel to perform matrix multiplication (`X @ W`). It uses a rigorous methodology to measure kernel latency and throughput.

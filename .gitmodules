@@ -1,0 +1,3 @@
+[submodule "tokamax"]
+	path = tokamax
+	url = https://github.com/openxla/tokamax.git

@@ -1,0 +1,13 @@
+[project]
+name = "delta_attention_comparison"
+version = "0.1.0"
+description = "Benchmark comparing KimiDeltaAttention and Qwen3NextGatedDeltaNet"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "jax",
+    "jaxlib",
+    "flax",
+    "optax",
+    "numpy",
+]

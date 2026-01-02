@@ -45,8 +45,9 @@ SANITIZED_NAME=$(sanitize_ref "$NAME")
 
 # Get the script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Create a temporary rendered yaml file
+# Create a temporary rendered yaml file in the script directory
 TEMP_YAML="${SCRIPT_DIR}/tpu_resource_rendered.sky.yaml"
 
 # Read the template and replace variables

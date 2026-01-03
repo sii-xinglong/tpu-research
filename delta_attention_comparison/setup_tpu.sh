@@ -1,36 +1,44 @@
 #!/bin/bash
 set -e
 
-echo "Setting up environment for TPU..."
+echo "=== Setting up TPU environment using uv ==="
 
-# 确保 uv 已安装
+# 1. Check and Install uv
 if ! command -v uv &> /dev/null; then
-    echo "uv could not be found, installing..."
+    echo ">> uv not found. Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    source $HOME/.cargo/env
+    source "$HOME/.cargo/env"
+else
+    echo ">> uv is already installed: $(uv --version)"
 fi
 
-# 创建并激活虚拟环境
-uv venv .venv
+# 2. Setup Virtual Environment
+echo ">> Creating/Updating virtual environment (.venv)..."
+# Ensure we use a compatible python version if available, else uv defaults to system or managed
+uv venv .venv --allow-existing
+
+# Activate venv for the script execution
 source .venv/bin/activate
 
-# 安装基础依赖 (flax, optax, etc.)
-# 注意：我们先不安装 pyproject.toml 中的 jax，以免覆盖 TPU 版本
-# 但 uv sync 通常会根据 lock 文件安装。
-# 这里我们直接使用 pip 模式安装 TPU 版本的 JAX，再安装其他包。
+# 3. Install Dependencies (JAX TPU + Project)
+echo ">> Installing JAX[tpu] and dependencies..."
 
-echo "Installing JAX for TPU (and other dependencies)..."
+# We use --find-links for TPU wheels.
+# We explicitly install jax[tpu] and libtpu to ensure they are picked up from the google bucket
+# before installing the rest of the project which might depend on 'jax' generic.
+# -e . installs the current project in editable mode.
 
-# 强制安装 TPU 版本的 JAX
-# 参考: https://jax.readthedocs.io/en/latest/installation.html#pip-installation-google-cloud-tpu
 uv pip install \
   --find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html \
   "jax[tpu]" \
-  "flax" \
-  "optax" \
-  "numpy"
+  "jaxlib" \
+  "libtpu-nightly" \
+  -e .
 
-echo "Installation complete. Active devices check:"
-python -c "import jax; print(jax.devices())"
+# 4. Verification
+echo ">> Verifying Installation..."
+python -c "import jax; print(f'JAX Version: {jax.__version__}'); print(f'Devices: {jax.devices()}')"
 
-echo "Setup done. Run 'source .venv/bin/activate' then 'python benchmark_script.py'"
+echo "=== Setup Complete ==="
+echo "To activate the environment, run:"
+echo "source .venv/bin/activate"

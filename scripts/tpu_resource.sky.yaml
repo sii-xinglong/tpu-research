@@ -1,6 +1,6 @@
 # Launch TPU resources for development with SkyPilot command:
 #   sky launch tpu_resource.sky.yaml
-workdir: ..
+workdir: ./delta_attention_comparison/
 
 resources:
   accelerators: $ACCELERATOR

@@ -10,8 +10,13 @@ requires-python = ">=3.12"
 dependencies = [
     "jax",
     "jaxlib",
-    "libtpu",
     "flax",
     "optax",
     "numpy",
+    "matplotlib>=3.10.8",
+    "jax[tpu]; sys_platform == 'linux'",
+    "libtpu; sys_platform == 'linux'",
 ]
+
+[tool.uv]
+find-links = ["https://storage.googleapis.com/jax-releases/libtpu_releases.html"]

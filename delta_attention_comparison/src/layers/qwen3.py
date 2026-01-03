@@ -279,3 +279,103 @@ class Qwen3NextGatedDeltaNet(nnx.Module):
     output = self.out_proj(gated_output)
 
     return output
+
+def analyze_qwen_operators(config: Config, batch_size: int, seq_len: int):
+  try:
+    from jax.experimental import roofline
+  except ImportError:
+    print("jax.experimental.roofline not available.")
+    return []
+
+  rngs = nnx.Rngs(0)
+  model = Qwen3NextGatedDeltaNet(config=config, rngs=rngs)
+
+  stats = []
+  
+  # Shapes
+  hidden_shape = jax.ShapeDtypeStruct((batch_size, seq_len, config.emb_dim), jnp.float32)
+  
+  # 1. QKVZ Proj
+  _, res_qkvz = roofline.roofline(lambda x: model.in_proj_qkvz(x))(hidden_shape)
+  stats.append({"name": "Qwen: QKVZ Proj", "flops": res_qkvz.flops, "bytes": res_qkvz.hbm_bytes})
+
+  # 2. BA Proj
+  _, res_ba = roofline.roofline(lambda x: model.in_proj_ba(x))(hidden_shape)
+  stats.append({"name": "Qwen: BA Proj", "flops": res_ba.flops, "bytes": res_ba.hbm_bytes})
+
+  # 3. Conv1D
+  # Input dim: key_dim*2 + value_dim.
+  # k_dim = head_k_dim * num_k_heads
+  # v_dim = head_v_dim * num_v_heads
+  # But we need to verify actual input size to conv inside __call__.
+  # qkv is concat of q, k, v.
+  # q: (B, L, K_HEADS * K_DIM)
+  # k: same
+  # v: (B, L, V_HEADS * V_DIM)
+  # So total channels = 2 * (K*K_D) + (V*V_D).
+  
+  conv_dim = model.key_dim * 2 + model.value_dim
+  conv_in_shape = jax.ShapeDtypeStruct((batch_size, seq_len, conv_dim), jnp.float32)
+  
+  _, res_conv = roofline.roofline(lambda x: model.conv1d(x))(conv_in_shape)
+  stats.append({"name": "Qwen: Conv1D", "flops": res_conv.flops, "bytes": res_conv.hbm_bytes})
+
+  # 4. Attn Core
+  # Need to construct inputs matching internal shapes.
+  # query: (B, L, K_HEADS, K_DIM)
+  # key: same
+  # value: (B, L, V_HEADS, V_DIM)
+  # g: (B, L, V_HEADS)
+  # beta: (B, L, V_HEADS)
+  
+  k_heads = config.gdn_num_key_heads
+  v_heads = config.gdn_num_value_heads
+  k_dim = config.gdn_key_head_dim
+  v_dim = config.gdn_value_head_dim
+  
+  q_shape = jax.ShapeDtypeStruct((batch_size, seq_len, k_heads, k_dim), jnp.float32)
+  v_shape = jax.ShapeDtypeStruct((batch_size, seq_len, v_heads, v_dim), jnp.float32)
+  g_shape = jax.ShapeDtypeStruct((batch_size, seq_len, v_heads), jnp.float32)
+
+  # Note: logic handles repeat inside __call__ if v_heads > k_heads, 
+  # but jax_chunk_gated_delta_rule expects matched or broadcastable?
+  # "if self.num_v_heads > self.num_k_heads ... query = jnp.repeat..."
+  # So jax_chunk_gated_delta_rule receives query with V_HEADS if repeated.
+  
+  # If we pass raw shapes to core, we should mimic what __call__ does.
+  # Let's assume we pass the *already repeated* shapes if needed, or rely on core to handle it?
+  # No, core doesn't repeat. Core expects compatible shapes.
+  # Q and K in core are (B, L, NH, K_DIM).
+  # If K_HEADS != V_HEADS, they must be aligned before calling core?
+  # __call__ repeats Q and K.
+  
+  core_q_heads = v_heads if v_heads > k_heads else k_heads
+  # If k_heads > v_heads (GQA), then V is repeated? No.
+  # The code says:
+  # if v > k and v % k == 0: repeat Q, K. (MQA/GQA inverted?)
+  # typically GQA means K,V are smaller. Here it seems V is larger?
+  # "gdn_num_value_heads"
+  
+  # Anyway, let's just use core_q_heads.
+  
+  q_core_shape = jax.ShapeDtypeStruct((batch_size, seq_len, core_q_heads, k_dim), jnp.float32)
+  v_core_shape = jax.ShapeDtypeStruct((batch_size, seq_len, v_heads, v_dim), jnp.float32)
+  g_core_shape = jax.ShapeDtypeStruct((batch_size, seq_len, v_heads), jnp.float32)
+  
+  def run_core(q, k, v, g, beta):
+      return jax_chunk_gated_delta_rule(
+          q, k, v, g, beta, 
+          chunk_size=config.gdn_chunk_size, 
+          use_qk_norm_in_gdn=config.use_qk_norm_in_gdn
+      )
+
+  _, res_core = roofline.roofline(run_core)(q_core_shape, q_core_shape, v_core_shape, g_core_shape, g_core_shape)
+  stats.append({"name": "Qwen: Attn Core", "flops": res_core.flops, "bytes": res_core.hbm_bytes})
+
+  # 5. Out Proj
+  # Input: (B, L, V_HEADS * V_DIM)
+  out_in_shape = jax.ShapeDtypeStruct((batch_size, seq_len, v_heads * v_dim), jnp.float32)
+  _, res_out = roofline.roofline(lambda x: model.out_proj(x))(out_in_shape)
+  stats.append({"name": "Qwen: Out Proj", "flops": res_out.flops, "bytes": res_out.hbm_bytes})
+
+  return stats

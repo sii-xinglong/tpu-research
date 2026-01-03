@@ -1,2 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# Mac
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitmodules
+
+# Skypilot
 .cluster_name
+tpu_resource_rendered.sky.yaml
+
+# Gemini
+.gemini/
+
+# Project Specific
 delta_attention_comparison/profiles/
+delta_attention_comparison/.venv
+
+# Large artifacts/Results not needed for execution
+matmul-shape/*.png
+matmul-shape/*.csv
+delta_attention_comparison/roofline_comparison.png
+
+# Sub-repos/Dependencies (Ignore history to speed up upload)
+flash-linear-attention/.git/
+tokamax/.git/

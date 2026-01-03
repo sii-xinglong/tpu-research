@@ -4,7 +4,7 @@
 This project is dedicated to conducting research and benchmarking experiments on Google Cloud TPUs (Tensor Processing Units). The primary objective is to implement, test, and optimize models (specifically Delta Attention variants and Qwen models) on TPU hardware.
 
 ## Development & Verification Paradigm
-**CRITICAL:** All code changes must be verified on an actual TPU server. Do not assume local correctness for TPU-specific operations (JAX/Pallas kernels).
+**CRITICAL:** All code changes must be verified on an actual TPU server. Do not assume local correctness for TPU-specific operations (JAX/Pallas kernels). The project use uv instead of pip.
 
 ### 1. Infrastructure Management
 We use [SkyPilot](https://skypilot.readthedocs.io/) to manage TPU resources.

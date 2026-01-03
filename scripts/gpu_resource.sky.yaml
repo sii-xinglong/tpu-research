@@ -1,0 +1,11 @@
+# Launch GPU resources for development with SkyPilot command:
+#   sky launch gpu_resource.sky.yaml
+workdir: ./delta_attention_comparison/
+
+resources:
+  accelerators: $ACCELERATOR
+  use_spot: True # The default instance is spot.
+
+setup: |
+  uv venv --python 3.12
+  source .venv/bin/activate

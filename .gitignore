@@ -29,6 +29,8 @@ tpu_resource_rendered.sky.yaml
 # Project Specific
 delta_attention_comparison/profiles/
 delta_attention_comparison/.venv
+delta_attention_comparison/src/__pycache__/
+delta_attention_comparison/src/layers/__pycache__/
 
 # Large artifacts/Results not needed for execution
 matmul-shape/*.png

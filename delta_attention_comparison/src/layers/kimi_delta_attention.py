@@ -69,13 +69,11 @@ def chunk_parallel_delta_attention(
   def compute_chunk_vars(k_blk, g_blk, beta_blk, v_blk):
       prec = jax.lax.Precision.HIGHEST
 
-      # Optimization: e^(g_i - g_j) = e^g_i * e^(-g_j)
-      # Avoids materializing (C, C, D) tensor
-      k_left = k_blk * jnp.exp(g_blk)
-      k_right = k_blk * jnp.exp(-g_blk)
-      
-      # (C, D) @ (D, C) -> (C, C)
-      a_raw_full = jnp.matmul(k_left, k_right.T, precision=prec)
+      # Stable computation of A_raw_ij = \sum_d k_id * k_jd * exp(g_id - g_jd)
+      # i > j, and g is cumsum of negative values, so g_i - g_j < 0. exp is stable.
+      g_diff = g_blk[:, None, :] - g_blk[None, :, :] # (C, C, D)
+      # (C, 1, D) * (1, C, D) * (C, C, D) -> (C, C, D) -> sum over D -> (C, C)
+      a_raw_full = jnp.sum(k_blk[:, None, :] * k_blk[None, :, :] * jnp.exp(g_diff), axis=-1)
       
       idx = jnp.arange(chunk_size)
       mask = idx[:, None] > idx[None, :] 
@@ -125,13 +123,11 @@ def chunk_parallel_delta_attention(
       q_i, k_i, u_i, w_i, g_i = x
       prec = jax.lax.Precision.HIGHEST
       
-      # Optimization: e^(g_i - g_j) = e^g_i * e^(-g_j)
-      # attn_local = (Q * exp(g)) @ (K * exp(-g)).T
-      q_left = q_i * jnp.exp(g_i)
-      k_right = k_i * jnp.exp(-g_i)
-      
-      # (B, NH, C, D) @ (B, NH, D, C) -> (B, NH, C, C)
-      attn_local_full = jnp.matmul(q_left, jnp.swapaxes(k_right, -1, -2), precision=prec)
+      # Stable computation of attn_local_full_ij = \sum_d q_id * k_jd * exp(g_id - g_jd)
+      # i >= j, and g is cumsum of negative values, so g_i - g_j <= 0. exp is stable.
+      # q_i: (B, NH, C, D), g_i: (B, NH, C, D)
+      g_diff = g_i[:, :, :, None, :] - g_i[:, :, None, :, :] # (B, NH, C, C, D)
+      attn_local_full = jnp.sum(q_i[:, :, :, None, :] * k_i[:, :, None, :, :] * jnp.exp(g_diff), axis=-1)
       
       idx = jnp.arange(chunk_size)
       mask = idx[:, None] >= idx[None, :] 
@@ -199,6 +195,7 @@ class KimiDeltaAttention(nnx.Module):
       hidden_size: int,
       num_heads: int,
       head_dim: int,
+      num_v_heads: Optional[int] = None,
       conv_kernel_size: int = 4,
       normalization_layer_epsilon: float = 1e-5,
       dtype: DType = jnp.float32,
@@ -208,6 +205,7 @@ class KimiDeltaAttention(nnx.Module):
   ):
     self.hidden_size = hidden_size
     self.num_heads = num_heads
+    self.num_v_heads = num_v_heads if num_v_heads is not None else num_heads
     self.head_dim = head_dim
     self.conv_kernel_size = conv_kernel_size
     self.normalization_layer_epsilon = normalization_layer_epsilon
@@ -224,24 +222,23 @@ class KimiDeltaAttention(nnx.Module):
         kernel_init=kernel_init, dtype=dtype, weight_dtype=weight_dtype, use_bias=False, rngs=rngs,
     )
     self.v_proj = DenseGeneral(
-        in_features_shape=(hidden_size,), out_features_shape=(num_heads*head_dim,),
+        in_features_shape=(hidden_size,), out_features_shape=(self.num_v_heads*head_dim,),
         kernel_init=kernel_init, dtype=dtype, weight_dtype=weight_dtype, use_bias=False, rngs=rngs,
     )
 
     conv_dim = num_heads * head_dim
     conv_kwargs = {
-        "in_features": conv_dim,
-        "out_features": conv_dim,
         "kernel_size": (conv_kernel_size,),
-        "feature_group_count": conv_dim,
         "padding": "CAUSAL",
         "use_bias": False,
         "dtype": dtype,
         "rngs": rngs,
     }
-    self.q_conv1d = nnx.Conv(**conv_kwargs)
-    self.k_conv1d = nnx.Conv(**conv_kwargs)
-    self.v_conv1d = nnx.Conv(**conv_kwargs)
+    self.q_conv1d = nnx.Conv(in_features=conv_dim, out_features=conv_dim, feature_group_count=conv_dim, **conv_kwargs)
+    self.k_conv1d = nnx.Conv(in_features=conv_dim, out_features=conv_dim, feature_group_count=conv_dim, **conv_kwargs)
+    
+    v_conv_dim = self.num_v_heads * head_dim
+    self.v_conv1d = nnx.Conv(in_features=v_conv_dim, out_features=v_conv_dim, feature_group_count=v_conv_dim, **conv_kwargs)
 
     self.b_proj = DenseGeneral(
         in_features_shape=(hidden_size,), out_features_shape=(num_heads,),
@@ -261,8 +258,8 @@ class KimiDeltaAttention(nnx.Module):
         kernel_init=kernel_init, dtype=dtype, weight_dtype=weight_dtype, use_bias=False, rngs=rngs,
     )
     self.g_b_proj = DenseGeneral(
-        in_features_shape=(head_dim,), out_features_shape=(num_heads*head_dim),
-        kernel_init=kernel_init, dtype=dtype, weight_dtype=weight_dtype, use_bias=False, rngs=rngs,
+        in_features_shape=(head_dim,), out_features_shape=(self.num_v_heads*head_dim),
+        kernel_init=kernel_init, dtype=dtype, weight_dtype=weight_dtype, use_bias=True, rngs=rngs,
     )
 
     def a_log_init(key, shape, dtype=jnp.float32):
@@ -275,7 +272,7 @@ class KimiDeltaAttention(nnx.Module):
         dim=head_dim, eps=self.normalization_layer_epsilon, activation="sigmoid", dtype=dtype, rngs=rngs,
     )
     self.o_proj = DenseGeneral(
-        in_features_shape=(num_heads*head_dim), out_features_shape=(hidden_size,),
+        in_features_shape=(self.num_v_heads*head_dim), out_features_shape=(hidden_size,),
         kernel_init=kernel_init, dtype=dtype, weight_dtype=weight_dtype, use_bias=False, rngs=rngs,
     )
 
@@ -295,9 +292,9 @@ class KimiDeltaAttention(nnx.Module):
   ) -> Tuple[Array, Optional[Array]]:
     batch, seq_len, _ = hidden_states.shape
 
-    q = l2norm(self.q_proj(hidden_states).reshape(batch, seq_len, self.num_heads, -1), dim=-1, eps=1e-6)
-    k = l2norm(self.k_proj(hidden_states).reshape(batch, seq_len, self.num_heads, -1), dim=-1, eps=1e-6)
-    v = self.v_proj(hidden_states).reshape(batch, seq_len, self.num_heads, -1)
+    q = self.q_proj(hidden_states).reshape(batch, seq_len, self.num_heads, -1)
+    k = self.k_proj(hidden_states).reshape(batch, seq_len, self.num_heads, -1)
+    v = self.v_proj(hidden_states).reshape(batch, seq_len, self.num_v_heads, -1)
 
     def apply_conv(x, conv_layer):
       batch, seq_len, num_heads, head_dim = x.shape
@@ -310,15 +307,27 @@ class KimiDeltaAttention(nnx.Module):
     k = apply_conv(k, self.k_conv1d)
     v = apply_conv(v, self.v_conv1d)
 
+    q = l2norm(q, dim=-1, eps=1e-6)
+    k = l2norm(k, dim=-1, eps=1e-6)
+
     beta = jax.nn.sigmoid(self.b_proj(hidden_states).astype(jnp.float32)).astype(self.dtype)
     g_forget = self.apply_fused_kda_gate(self.f_b_proj(self.f_a_proj(hidden_states)))
+    
+    # Repeat for MQA/GQA if num_v_heads > num_heads
+    if self.num_v_heads > self.num_heads:
+        assert self.num_v_heads % self.num_heads == 0
+        n_rep = self.num_v_heads // self.num_heads
+        q = jnp.repeat(q, n_rep, axis=2)
+        k = jnp.repeat(k, n_rep, axis=2)
+        g_forget = jnp.repeat(g_forget, n_rep, axis=2)
+        beta = jnp.repeat(beta, n_rep, axis=2)
 
     attn_out, final_state = chunk_parallel_delta_attention(
         query=q, key=k, value=v, g=g_forget, beta=beta,
         chunk_size=chunk_size, initial_state=initial_state, output_final_state=output_final_state
     )
 
-    g_output = self.g_b_proj(self.g_a_proj(hidden_states)).reshape(batch, seq_len, self.num_heads, self.head_dim)
+    g_output = self.g_b_proj(self.g_a_proj(hidden_states)).reshape(batch, seq_len, self.num_v_heads, self.head_dim)
     out = self.o_norm(attn_out, g_output)
     out = out.reshape(batch, seq_len, -1)
     

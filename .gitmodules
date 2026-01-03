@@ -1,3 +1,6 @@
 [submodule "tokamax"]
 	path = tokamax
 	url = https://github.com/openxla/tokamax.git
+[submodule "fla"]
+	path = fla
+	url = https://github.com/fla-org/flash-linear-attention.git

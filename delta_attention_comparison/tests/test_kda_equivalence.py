@@ -40,7 +40,7 @@ def set_linear(jax_linear, pt_linear, transpose=True):
         else:
              print(f"Warning: PyTorch layer has bias but JAX layer does not. PT bias shape: {pt_linear.bias.shape}")
 
-def test_kda_equivalence(B=1, L_list=[1024, 2048, 4096, 8192, 16384, 32768], H=2048, NH=16, NV=32, D=128, K=4):
+def test_kda_equivalence(B=1, L_list=[1024, 2048, 4096, 8192, 16384, 32768], H=2304, NH=32, NV=32, D=128, K=4):
     for L in L_list:
         print(f"\nTesting Kimi Delta Attention Equivalence (B={B}, L={L}, H={H}, NH={NH}, NV={NV}, D={D}, K={K})...")
         # Force JAX to CPU, PyTorch to CUDA
@@ -95,9 +95,6 @@ def test_kda_equivalence(B=1, L_list=[1024, 2048, 4096, 8192, 16384, 32768], H=2
         # G Proj (Output Gate)
         set_linear(jax_model.g_a_proj, pt_model.g_proj[0])
         set_linear(jax_model.g_b_proj, pt_model.g_proj[1])
-        
-        with torch.no_grad():
-            pt_model.g_proj[1].bias.zero_()
         
         # Params
         jax_model.A_log.value = t2j(pt_model.A_log).reshape(1, 1, NH, 1)

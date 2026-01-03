@@ -7,5 +7,7 @@ resources:
   use_spot: True # The default instance is spot.
 
 setup: |
-  uv venv --python 3.12
-  source .venv/bin/activate
+  sudo apt install -y npm
+  sudo npm install -g n
+  sudo n stable
+  sudo npm install -g @google/gemini-cli

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'linux'",
@@ -1592,14 +1592,21 @@ dependencies = [
     { name = "einops" },
     { name = "flax" },
     { name = "jax" },
-    { name = "jax", extra = ["tpu"], marker = "sys_platform == 'linux'" },
     { name = "jaxlib" },
-    { name = "libtpu", marker = "sys_platform == 'linux'" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "optax" },
-    { name = "torch" },
     { name = "transformers" },
+]
+
+[package.optional-dependencies]
+gpu = [
+    { name = "jax" },
+    { name = "torch" },
+]
+tpu = [
+    { name = "jax", extra = ["tpu"], marker = "sys_platform == 'linux'" },
+    { name = "libtpu", marker = "sys_platform == 'linux'" },
 ]
 
 [package.metadata]
@@ -1607,15 +1614,17 @@ requires-dist = [
     { name = "einops" },
     { name = "flax" },
     { name = "jax" },
-    { name = "jax", extras = ["tpu"], marker = "sys_platform == 'linux'" },
+    { name = "jax", extras = ["cpu"], marker = "extra == 'gpu'" },
+    { name = "jax", extras = ["tpu"], marker = "sys_platform == 'linux' and extra == 'tpu'" },
     { name = "jaxlib" },
-    { name = "libtpu", marker = "sys_platform == 'linux'" },
+    { name = "libtpu", marker = "sys_platform == 'linux' and extra == 'tpu'" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numpy" },
     { name = "optax" },
-    { name = "torch", specifier = ">=2.9.1" },
+    { name = "torch", marker = "extra == 'gpu'", specifier = ">=2.5.0" },
     { name = "transformers" },
 ]
+provides-extras = ["tpu", "gpu"]
 
 [[package]]
 name = "tqdm"

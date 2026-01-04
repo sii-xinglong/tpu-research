@@ -14,11 +14,18 @@ dependencies = [
     "optax",
     "numpy",
     "matplotlib>=3.10.8",
-    "jax[tpu]; sys_platform == 'linux'",
-    "libtpu; sys_platform == 'linux'",
-    "torch>=2.9.1",
     "transformers",
     "einops",
+]
+
+[project.optional-dependencies]
+tpu = [
+    "jax[tpu]; sys_platform == 'linux'",
+    "libtpu; sys_platform == 'linux'",
+]
+gpu = [
+    "torch>=2.5.0",
+    "jax[cpu]",
 ]
 
 [tool.uv]

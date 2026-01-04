@@ -203,12 +203,9 @@ def main():
     parser.add_argument("--head_dim", type=int, default=128, help="Head dimension")
     parser.add_argument("--chunk_size", type=int, default=64, help="Chunk size")
     parser.add_argument("--hardware", type=str, default="v6e", choices=["v5e", "v6e"], help="Target Hardware")
+    parser.add_argument("--sweep", action="store_true", help="Run a sweep of batch sizes and sequence lengths")
     
     args = parser.parse_args()
-    
-    global batch_size, seq_len # Hack for plot title visibility inside function if needed
-    batch_size = args.batch_size
-    seq_len = args.sequence_length
     
     hw = TPU_V6E if args.hardware == "v6e" else TPU_V5E
     
@@ -218,36 +215,58 @@ def main():
         head_dim=args.head_dim,
         chunk_size=args.chunk_size
     )
-    
-    print(f"Analyzing for {hw.name} | Batch: {args.batch_size}, Seq: {args.sequence_length}")
-    print("-" * 60)
-    
-    # Analyze Kimi
-    print(">>> KimiDeltaAttention Analysis")
-    kimi_stats = analyze_kimi(args.batch_size, args.sequence_length, cfg)
-    total_kimi_time = 0
-    print(f"{'Operator':<20} | {'FLOPs':<10} | {'Bytes':<10} | {'Intensity':<10} | {'Time (us)':<10} | {'Bound'}")
-    for s in kimi_stats:
-        t_sec = s.time_sec(hw)
-        total_kimi_time += t_sec
-        print(f"{s.name:<20} | {s.flops:.2e}   | {s.bytes:.2e}   | {s.intensity:.2f}       | {t_sec*1e6:.2f}     | {s.bound(hw)}")
-    print(f"Total Theoretical Time: {total_kimi_time*1e6:.2f} us")
-    print("-" * 60)
 
-    # Analyze Qwen
-    print(">>> Qwen3NextGatedDeltaNet Analysis")
-    qwen_stats = analyze_qwen(args.batch_size, args.sequence_length, cfg)
-    total_qwen_time = 0
-    print(f"{'Operator':<20} | {'FLOPs':<10} | {'Bytes':<10} | {'Intensity':<10} | {'Time (us)':<10} | {'Bound'}")
-    for s in qwen_stats:
-        t_sec = s.time_sec(hw)
-        total_qwen_time += t_sec
-        print(f"{s.name:<20} | {s.flops:.2e}   | {s.bytes:.2e}   | {s.intensity:.2f}       | {t_sec*1e6:.2f}     | {s.bound(hw)}")
-    print(f"Total Theoretical Time: {total_qwen_time*1e6:.2f} us")
-    print("-" * 60)
-    
-    # Plot
-    plot_roofline(kimi_stats + qwen_stats, hw, "Kimi vs Qwen", "roofline_comparison.png")
+    if args.sweep:
+        configs = [
+            (1, 4096),
+            (1, 8192),
+            (1, 16384),
+            (1, 32768),
+            (1, 65536),
+            (1, 131072),
+            (2, 32768),
+            (4, 32768),
+            (8, 32768),
+            (16, 32768),
+        ]
+    else:
+        configs = [(args.batch_size, args.sequence_length)]
+
+    for b, l in configs:
+        global batch_size, seq_len 
+        batch_size = b
+        seq_len = l
+        
+        print(f"\nAnalyzing for {hw.name} | Batch: {b}, Seq: {l}")
+        print("-" * 60)
+        
+        # Analyze Kimi
+        print(">>> KimiDeltaAttention Analysis")
+        kimi_stats = analyze_kimi(b, l, cfg)
+        total_kimi_time = 0
+        print(f"{'Operator':<20} | {'FLOPs':<10} | {'Bytes':<10} | {'Intensity':<10} | {'Time (us)':<10} | {'Bound'}")
+        for s in kimi_stats:
+            t_sec = s.time_sec(hw)
+            total_kimi_time += t_sec
+            print(f"{s.name:<20} | {s.flops:.2e}   | {s.bytes:.2e}   | {s.intensity:.2f}       | {t_sec*1e6:.2f}     | {s.bound(hw)}")
+        print(f"Total Theoretical Time: {total_kimi_time*1e6:.2f} us")
+        print("-" * 60)
+
+        # Analyze Qwen
+        print(">>> Qwen3NextGatedDeltaNet Analysis")
+        qwen_stats = analyze_qwen(b, l, cfg)
+        total_qwen_time = 0
+        print(f"{'Operator':<20} | {'FLOPs':<10} | {'Bytes':<10} | {'Intensity':<10} | {'Time (us)':<10} | {'Bound'}")
+        for s in qwen_stats:
+            t_sec = s.time_sec(hw)
+            total_qwen_time += t_sec
+            print(f"{s.name:<20} | {s.flops:.2e}   | {s.bytes:.2e}   | {s.intensity:.2f}       | {t_sec*1e6:.2f}     | {s.bound(hw)}")
+        print(f"Total Theoretical Time: {total_qwen_time*1e6:.2f} us")
+        print("-" * 60)
+        
+        # Plot
+        filename = f"roofline_comparison_B{b}_L{l}.png"
+        plot_roofline(kimi_stats + qwen_stats, hw, f"Kimi vs Qwen (B={b}, L={l})", filename)
 
 if __name__ == "__main__":
     main()

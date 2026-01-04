@@ -72,11 +72,15 @@ def chunk_parallel_delta_attention(
       # Stable computation of A_raw_ij = \sum_d k_id * k_jd * exp(g_id - g_jd)
       # i > j, and g is cumsum of negative values, so g_i - g_j < 0. exp is stable.
       g_diff = g_blk[:, None, :] - g_blk[None, :, :] # (C, C, D)
+      
+      # Mask g_diff to prevent overflow in unused positions (i <= j)
+      idx = jnp.arange(chunk_size)
+      mask = idx[:, None] > idx[None, :] 
+      g_diff = jnp.where(jnp.expand_dims(mask, -1), g_diff, -1e18)
+
       # (C, 1, D) * (1, C, D) * (C, C, D) -> (C, C, D) -> sum over D -> (C, C)
       a_raw_full = jnp.sum(k_blk[:, None, :] * k_blk[None, :, :] * jnp.exp(g_diff), axis=-1)
       
-      idx = jnp.arange(chunk_size)
-      mask = idx[:, None] > idx[None, :] 
       A_raw = jnp.where(mask, a_raw_full, 0.0)
 
       A = A_raw * jnp.expand_dims(beta_blk, -1)
@@ -127,11 +131,17 @@ def chunk_parallel_delta_attention(
       # i >= j, and g is cumsum of negative values, so g_i - g_j <= 0. exp is stable.
       # q_i: (B, NH, C, D), g_i: (B, NH, C, D)
       g_diff = g_i[:, :, :, None, :] - g_i[:, :, None, :, :] # (B, NH, C, C, D)
-      attn_local_full = jnp.sum(q_i[:, :, :, None, :] * k_i[:, :, None, :, :] * jnp.exp(g_diff), axis=-1)
       
       idx = jnp.arange(chunk_size)
       mask = idx[:, None] >= idx[None, :] 
-      attn_local = jnp.where(jnp.expand_dims(mask, (0, 1)), attn_local_full, 0.0)
+      
+      # Mask g_diff to prevent overflow in unused positions (i < j)
+      mask_expanded = jnp.expand_dims(mask, (0, 1)) # (1, 1, C, C)
+      g_diff = jnp.where(jnp.expand_dims(mask_expanded, -1), g_diff, -1e18)
+      
+      attn_local_full = jnp.sum(q_i[:, :, :, None, :] * k_i[:, :, None, :, :] * jnp.exp(g_diff), axis=-1)
+      
+      attn_local = jnp.where(mask_expanded, attn_local_full, 0.0)
       
       correction = jnp.matmul(w_i, prev_state, precision=prec)
       v_new = u_i - correction

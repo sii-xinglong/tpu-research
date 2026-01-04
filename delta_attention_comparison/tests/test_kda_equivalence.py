@@ -109,29 +109,58 @@ def test_kda_equivalence(B=1, L_list=[1024, 2048, 4096, 8192, 16384, 32768], H=2
         # --- Input ---
         np.random.seed(42)
         x_np = np.random.randn(B, L, H).astype(np.float32)
-        x_pt = torch.tensor(x_np, device=device)
+        x_pt = torch.tensor(x_np, device=device, requires_grad=True)
         x_jax = jnp.array(x_np)
+
+        # Generate random upstream gradient
+        dy_np = np.random.randn(B, L, H).astype(np.float32)
+        dy_pt = torch.tensor(dy_np, device=device)
+        dy_jax = jnp.array(dy_np)
         
-        # --- Forward ---
-        with torch.no_grad():
-            out_pt_tuple = pt_model(x_pt, output_attentions=False)
-            out_pt = out_pt_tuple[0]
+        # --- Forward & Backward (PyTorch) ---
+        # Note: PyTorch TorchKDA forward returns (output, cache) tuple when output_attentions=False
+        out_pt_tuple = pt_model(x_pt, output_attentions=False)
+        out_pt = out_pt_tuple[0]
+        
+        # Backward
+        out_pt.backward(dy_pt)
+        dx_pt = x_pt.grad
             
+        # --- Forward & Backward (JAX) ---
+        def loss_fn(model, x):
+            out, _ = model(x)
+            return jnp.sum(out * dy_jax)
+
+        # Value and Grad w.r.t input x (argnums=1)
+        grad_fn = nnx.value_and_grad(loss_fn, argnums=1)
+        (loss_jax, dx_jax) = grad_fn(jax_model, x_jax)
+        
+        # Explicit forward for output check
         out_jax_tuple = jax_model(x_jax)
         out_jax = out_jax_tuple[0]
         
-        # --- Compare ---
-        out_pt_np = out_pt.cpu().numpy()
+        # --- Compare Forward ---
+        out_pt_np = out_pt.detach().cpu().numpy()
         out_jax_np = np.array(out_jax)
         
         diff = np.abs(out_pt_np - out_jax_np)
         max_diff = diff.max()
-        mean_diff = diff.mean()
-        print(f"Max Diff: {max_diff:.8f}")
-        print(f"Mean Diff: {mean_diff:.8f}")
+        print(f"Forward Max Diff: {max_diff:.8f}")
         
-        # Increased tolerance to 1e-3 for cross-framework/cross-device check
-        assert np.allclose(out_pt_np, out_jax_np, atol=1e-3, rtol=1e-3), f"Outputs do not match! Max diff: {max_diff}"
+        assert np.allclose(out_pt_np, out_jax_np, atol=1e-3, rtol=1e-3), f"Forward outputs do not match! Max diff: {max_diff}"
+        
+        # --- Compare Backward ---
+        dx_pt_np = dx_pt.cpu().numpy()
+        dx_jax_np = np.array(dx_jax)
+        
+        diff_grad = np.abs(dx_pt_np - dx_jax_np)
+        max_diff_grad = diff_grad.max()
+        mean_diff_grad = diff_grad.mean()
+        print(f"Backward Max Diff (Input Grad): {max_diff_grad:.8f}")
+        print(f"Backward Mean Diff (Input Grad): {mean_diff_grad:.8f}")
+
+        assert np.allclose(dx_pt_np, dx_jax_np, atol=2e-3, rtol=2e-3), f"Backward gradients do not match! Max diff: {max_diff_grad}"
+
         print(f"SUCCESS: Equivalence Test Passed for L={L}!")
 
 if __name__ == "__main__":

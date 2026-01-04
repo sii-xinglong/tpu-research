@@ -2,6 +2,9 @@
 #   sky launch tpu_resource.sky.yaml
 workdir: ./delta_attention_comparison/
 
+file_mounts:
+  ~/.ssh/id_ed25519: ~/.ssh/id_ed25519
+
 resources:
   accelerators: $ACCELERATOR
   accelerator_args:
@@ -10,5 +13,7 @@ resources:
   use_spot: True # The default instance is spot.
 
 setup: |
-  uv venv --python 3.12
-  source .venv/bin/activate
+  sudo apt install -y npm
+  sudo npm install -g n
+  sudo n stable
+  sudo npm install -g @google/gemini-cli

@@ -60,7 +60,7 @@ sed -e "s|\$ACCELERATOR|${ACCELERATOR}|g" \
 CLUSTER_NAME="tpu-$ACCELERATOR-$SANITIZED_NAME-$RANDOM"
 
 # Save cluster name to file for other scripts to use
-echo "$CLUSTER_NAME" > "${SCRIPT_DIR}/../.cluster_name"
+echo "$CLUSTER_NAME" > "${SCRIPT_DIR}/../.cluster_name_tpu"
 
 # Execute sky launch command
 echo ""

@@ -23,8 +23,6 @@ venv/
 .cluster_name
 tpu_resource_rendered.sky.yaml
 
-# Gemini
-.gemini/
 
 # Project Specific
 delta_attention_comparison/profiles/

@@ -3,18 +3,51 @@
 # Get the script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-CLUSTER_NAME_FILE="${SCRIPT_DIR}/../.cluster_name"
 
-# Check if cluster name file exists
+# Cluster name files
+TPU_FILE="${SCRIPT_DIR}/../.cluster_name_tpu"
+GPU_FILE="${SCRIPT_DIR}/../.cluster_name_gpu"
+
+# Argument handling
+TARGET=$1
+
+if [ "$TARGET" == "gpu" ]; then
+    CLUSTER_NAME_FILE="$GPU_FILE"
+elif [ "$TARGET" == "tpu" ]; then
+    CLUSTER_NAME_FILE="$TPU_FILE"
+else
+    # Auto-detection based on file existence and modification time
+    if [ -f "$TPU_FILE" ] && [ ! -f "$GPU_FILE" ]; then
+        CLUSTER_NAME_FILE="$TPU_FILE"
+        echo "Auto-detected TPU cluster."
+    elif [ ! -f "$TPU_FILE" ] && [ -f "$GPU_FILE" ]; then
+        CLUSTER_NAME_FILE="$GPU_FILE"
+        echo "Auto-detected GPU cluster."
+    elif [ -f "$TPU_FILE" ] && [ -f "$GPU_FILE" ]; then
+        if [ "$TPU_FILE" -nt "$GPU_FILE" ]; then
+            CLUSTER_NAME_FILE="$TPU_FILE"
+            echo "Auto-detected TPU cluster (newer)."
+        else
+            CLUSTER_NAME_FILE="$GPU_FILE"
+            echo "Auto-detected GPU cluster (newer)."
+        fi
+    else
+        echo "Error: No .cluster_name_tpu or .cluster_name_gpu file found."
+        echo "Usage: $0 [tpu|gpu]"
+        exit 1
+    fi
+fi
+
+# Check if selected file exists
 if [ ! -f "$CLUSTER_NAME_FILE" ]; then
-    echo "Error: .cluster_name file not found. Have you launched a cluster?"
+    echo "Error: Cluster name file '$CLUSTER_NAME_FILE' not found."
     exit 1
 fi
 
 CLUSTER_NAME=$(cat "$CLUSTER_NAME_FILE")
 
 if [ -z "$CLUSTER_NAME" ]; then
-    echo "Error: Cluster name is empty."
+    echo "Error: Cluster name is empty in $CLUSTER_NAME_FILE."
     exit 1
 fi
 

@@ -70,10 +70,14 @@ sky exec $(cat .cluster_name_tpu) "uv run --extra tpu python delta_attention_com
     from jax.experimental import pallas as pl
     from jax.experimental.pallas import tpu as pltpu
     ```
+### Do Not Use
+*   **Do not use any operations that require dynamic memory allocation or replace memory storage by set. suck like w.at[c].set(w1) **
 
 ### Core Concepts & Patterns
 
 #### 1. Grid & Memory Hierarchy
+*   **Layout:** The Pallas TPU lowering currently requires that the last two dimensions of your block shape are divisible by 8 and 128 respectively, or be equal to the respective dimensions  of the overall array.
+
 *   **Grid Spec:** Use `pltpu.PrefetchScalarGridSpec` for automatic HBM<->VMEM management in simple cases.
     ```python
     grid_spec = pltpu.PrefetchScalarGridSpec(
@@ -115,5 +119,5 @@ sky exec $(cat .cluster_name_tpu) "uv run --extra tpu python delta_attention_com
 
 ### Reference Material
 *   **Tokamax:** The submodule `tokamax/` contains production-grade Pallas kernels.
-    *   **Study File:** `tokamax/tokamax/_src/ops/linear_softmax_cross_entropy_loss/pallas_mosaic_tpu.py`
+    *   **Study File:** `tokamax/tokamax/_src/ops/attention/pallas_triton.py and tpu_inference_kernel/flash_attention/kernel.py`
     *   **Look for:** Implementation of manual pipelining (using `stage_index`), async copies, and semaphores. Do not import `tokamax` directly in research code; strictly use it as a reference for implementation patterns.

@@ -56,12 +56,6 @@
                 *   Compute $L_{22}^{-1}$ (recursive).
                 *   Compute off-diagonal: $L_{21}^{-1} = -L_{22}^{-1} (L_{21} L_{11}^{-1})$.
                 *   This maps efficiently to TPU Matrix Units (MXU) as it consists of Matrix-Matrix Multiplications (MM).
-    *   **Structure Reference (inspired by `@tokamax`)**:
-        *   Adhere to a structured Op definitions to ensure strict typing and clean separation of concerns.
-        *   `_src/ops/kda_pallas/`:
-            *   `base.py`: Define `KDAOp` class inheriting from `op.Op`, handling `bind`, `canonicalize_precision`, etc.
-            *   `impl.py`: Pallas kernel implementation details (`pallas_call`, `kernel_func`).
-            *   `api.py`: Public entry point `kimi_delta_attention(...)` dispatching to `KDAOp`.
 
 ### Phase 2: Implementation of `pallas_call` (代码实现)
 *   **File**: 创建 `delta_attention_comparison/src/layers/pallas_kda.py`。

@@ -21,8 +21,11 @@ venv/
 
 # Skypilot
 .cluster_name
-tpu_resource_rendered.sky.yaml
+.cluster_name_tpu
+.cluster_name_gpu
 
+tpu_resource_rendered.sky.yaml
+gpu_resource_rendered.sky.yaml
 
 # Project Specific
 delta_attention_comparison/profiles/

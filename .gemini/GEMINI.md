@@ -56,6 +56,8 @@ bash scripts/sync_code.sh
 # 2. Run benchmark on remote
 # Note: Read from the correct file (.cluster_name_tpu or .cluster_name_gpu)
 sky exec $(cat .cluster_name_tpu) "uv run --extra tpu python delta_attention_comparison/benchmark_script.py"
+
+bash scripts/sync_code.sh gpu && sky exec $(cat .cluster_name_gpu) "export CUDA_VISIBLE_DEVICES=0; uv run --extra gpu python delta_attention_comparison/tests/test_kda_equivalence.py" 
 ```
 
 ### Step 3: Debugging
@@ -70,8 +72,6 @@ sky exec $(cat .cluster_name_tpu) "uv run --extra tpu python delta_attention_com
     from jax.experimental import pallas as pl
     from jax.experimental.pallas import tpu as pltpu
     ```
-### Do Not Use
-*   **Do not use any operations that require dynamic memory allocation or replace memory storage by set. suck like w.at[c].set(w1) **
 
 ### Core Concepts & Patterns
 
@@ -105,6 +105,47 @@ sky exec $(cat .cluster_name_tpu) "uv run --extra tpu python delta_attention_com
     def load_initial():
         ...
     ```
+
+#### 3. Scalar Operations & Types
+TPU scalar registers are strictly **32-bit**. Operations on sub-32-bit scalars (e.g., `int8`, `int16`, `bfloat16` loaded from a Ref) will fail or cause compilation errors if not handled correctly.
+
+*   **Storage vs. Usage:**
+    *   **Storage:** Use compact types (`jnp.int8`, `jnp.int16`, `jnp.bfloat16`) for metadata tables or constants in VMEM/SMEM to minimize memory footprint and bandwidth.
+    *   **Usage:** Explicitly cast to **32-bit** (`jnp.int32`, `jnp.float32`) immediately upon loading a scalar value, before using it in any arithmetic, comparison, or control flow.
+*   **Pattern:**
+    ```python
+    # Example: Loading a scalar index from a compact int8 table
+    # table_ref: Ref[int8]
+    
+    # 1. Load:
+    val_i8 = table_ref[idx]
+    
+    # 2. Cast immediately:
+    val_i32 = val_i8.astype(jnp.int32)
+    
+    # 3. Use:
+    # Do NOT use val_i8 directly in `if`, `pl.when`, arithmetic, or slicing
+    @pl.when(val_i32 > 0)
+    def do_work():
+        target_idx = val_i32 * block_size  # Arithmetic safe on i32
+        ...
+    ```
+*   **Advanced: Bitwise Unpacking (for packed sub-32bit types):**
+    If you need to extract individual values from a packed 32-bit word (e.g., extracting two `bfloat16` values or eight `int4` values from a `uint32`), use bitwise shifts and masking.
+    ```python
+    # Example: Unpacking 2x bfloat16 from a uint32 loaded from VMEM
+    # packed_val: uint32 containing [bf16_high | bf16_low]
+    
+    # Extract Low 16 bits
+    val_low_bf16 = (packed_val & 0xFFFF0000).bitcast(jnp.float32).astype(jnp.bfloat16)
+    
+    # Extract High 16 bits
+    val_high_bf16 = (packed_val << 16).bitcast(jnp.float32).astype(jnp.bfloat16)
+    ```
+*   **Alignment:** Ensure dimensions of sub-32bit arrays stored in memory are aligned to 32-bits (4 bytes).
+    *   `int8`: Dimension must be multiple of 4.
+    *   `int4`: Dimension must be multiple of 8.
+    *   `bfloat16`/`int16`: Dimension must be multiple of 2.
 
 ### Optimization Checklist
 1.  **Block Size & Alignment:**

@@ -16,7 +16,7 @@ def jax_chunk_gated_delta_rule(
     value: Array,
     g: Array,
     beta: Array,
-    chunk_size: int = 64,
+    chunk_size: int = 256,
     initial_state: None | Array = None,
     use_qk_norm_in_gdn: bool = False,
 ) -> tuple[Array, None | Array]:

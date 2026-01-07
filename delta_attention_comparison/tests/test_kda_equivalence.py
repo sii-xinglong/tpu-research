@@ -47,7 +47,8 @@ def test_kda_equivalence(B_list=[1, 2, 4, 8], L_list=[1024, 2048, 4096, 8192, 16
             # Force JAX to CPU, PyTorch to CUDA
             os.environ['JAX_PLATFORMS'] = 'cpu'
             
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            # failed if cannot access cuda
+            device = torch.device('cuda')
             
             # Init PyTorch Model
             torch.manual_seed(42)
@@ -124,13 +125,13 @@ def test_kda_equivalence(B_list=[1, 2, 4, 8], L_list=[1024, 2048, 4096, 8192, 16
             out_pt = out_pt_tuple[0]
             
             # Backward
-            out_pt.backward(dy_pt)
+            out_pt.backward(dy_pt / dy_pt.numel())
             dx_pt = x_pt.grad
                 
             # --- Forward & Backward (JAX) ---
             def loss_fn(model, x):
                 out, _ = model(x)
-                return jnp.sum(out * dy_jax)
+                return jnp.mean(out * dy_jax)
 
             # Value and Grad w.r.t input x (argnums=1)
             grad_fn = nnx.value_and_grad(loss_fn, argnums=1)
@@ -159,6 +160,10 @@ def test_kda_equivalence(B_list=[1, 2, 4, 8], L_list=[1024, 2048, 4096, 8192, 16
             mean_diff_grad = diff_grad.mean()
             print(f"Backward Max Diff (Input Grad): {max_diff_grad:.8f}")
             print(f"Backward Mean Diff (Input Grad): {mean_diff_grad:.8f}")
+
+            # Cosine Similarity
+            cosine_sim = np.sum(dx_pt_np * dx_jax_np) / (np.linalg.norm(dx_pt_np) * np.linalg.norm(dx_jax_np))
+            print(f"Backward Gradient Cosine Similarity: {cosine_sim:.8f}")
 
             assert np.allclose(dx_pt_np, dx_jax_np, atol=2e-3, rtol=2e-3), f"Backward gradients do not match! Max diff: {max_diff_grad}"
 

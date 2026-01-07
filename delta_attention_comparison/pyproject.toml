@@ -11,6 +11,10 @@ dependencies = [
     "optax",
     "numpy",
     "matplotlib>=3.10.8",
+]
+
+[project.optional-dependencies]
+tpu = [
     "jax[tpu]; sys_platform == 'linux'",
     "libtpu; sys_platform == 'linux'",
 ]

@@ -8,7 +8,6 @@ description = "A collection of tpu experiments."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "jax",
     "jaxlib",
     "flax",
     "optax",
@@ -24,7 +23,8 @@ tpu = [
     "libtpu; sys_platform == 'linux'",
 ]
 gpu = [
-    "torch>=2.5.0",
+    "torch",
+    "triton>=3.2.0",
     "jax[cpu]",
 ]
 

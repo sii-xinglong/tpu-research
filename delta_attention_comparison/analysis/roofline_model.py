@@ -201,7 +201,7 @@ def main():
     parser.add_argument("--hidden_size", type=int, default=2048, help="Hidden size")
     parser.add_argument("--num_heads", type=int, default=16, help="Number of heads")
     parser.add_argument("--head_dim", type=int, default=128, help="Head dimension")
-    parser.add_argument("--chunk_size", type=int, default=64, help="Chunk size")
+    parser.add_argument("--chunk_size", type=int, default=256, help="Chunk size")
     parser.add_argument("--hardware", type=str, default="v6e", choices=["v5e", "v6e"], help="Target Hardware")
     parser.add_argument("--sweep", action="store_true", help="Run a sweep of batch sizes and sequence lengths")
     

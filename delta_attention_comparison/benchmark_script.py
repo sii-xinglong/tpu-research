@@ -19,9 +19,9 @@ class BenchmarkConfig:
         self.gdn_value_head_dim = 128
         self.gdn_key_head_dim = 128
         self.gdn_conv_kernel_dim = 4
-        self.gdn_chunk_size = 64
-        self.dtype = jnp.float32 # Use float32 for simplicity on CPU/Metal
-        self.weight_dtype = jnp.float32
+        self.gdn_chunk_size = 256
+        self.dtype = jnp.bfloat16 # Use bfloat16 for TPU/GPU benchmarking
+        self.weight_dtype = jnp.bfloat16
         self.normalization_layer_epsilon = 1e-6
         self.use_qk_norm_in_gdn = True
         self.matmul_precision = "default"
@@ -42,8 +42,8 @@ print("-" * 40)
 # Parameters
 BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128]
 SEQ_LENS = [1024, 2048, 4096, 8192]
-WARMUP_STEPS = 5
-STEPS = 10
+WARMUP_STEPS = 2
+STEPS = 3
 
 def benchmark_layer(layer_cls, layer_name, create_args, input_shape, steps=STEPS, warmup=WARMUP_STEPS):
     rngs = nnx.Rngs(0)
@@ -59,7 +59,7 @@ def benchmark_layer(layer_cls, layer_name, create_args, input_shape, steps=STEPS
     # Create dummy input
     key = jax.random.PRNGKey(0)
     try:
-        x = jax.random.normal(key, input_shape, dtype=jnp.float32)
+        x = jax.random.normal(key, input_shape, dtype=config.dtype)
     except Exception as e:
         raise RuntimeError(f"Input creation failed: {e}")
 
@@ -72,7 +72,7 @@ def benchmark_layer(layer_cls, layer_name, create_args, input_shape, steps=STEPS
             return jnp.mean(out)
         
         loss, grads = nnx.value_and_grad(loss_fn)(model)
-        optimizer.update(grads)
+        optimizer.update(model, grads)
         return loss
 
     # Warmup
@@ -120,11 +120,15 @@ def main():
                 diff = (t_qwen - t_kimi) / t_kimi * 100
                 print(f"{b:<6} | {s:<6} | {t_kimi*1000:<10.2f} | {t_qwen*1000:<10.2f} | {diff:<10.2f}")
             except Exception as e:
+                import traceback
+                import sys
+                traceback.print_exc()
                 err_msg = str(e)
                 if "Resource exhausted" in err_msg or "OOM" in err_msg:
                     print(f"{b:<6} | {s:<6} | {'OOM':<10} | {'OOM':<10} | {'-':<10}")
                 else:
-                    print(f"{b:<6} | {s:<6} | {'Err':<10} | {'Err':<10} | {err_msg[:10]}")
+                    print(f"{b:<6} | {s:<6} | {'Err':<10} | {'Err':<10} | {err_msg[:20]}")
+                    sys.exit(1)
 
 if __name__ == "__main__":
     main()

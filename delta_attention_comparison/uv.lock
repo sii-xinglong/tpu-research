@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'linux'",
@@ -332,30 +332,35 @@ dependencies = [
     { name = "flax", version = "0.10.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "flax", version = "0.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, extra = ["tpu"], marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
     { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, extra = ["tpu"], marker = "python_full_version >= '3.11' and sys_platform == 'linux'" },
     { name = "jaxlib", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jaxlib", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "libtpu", version = "0.0.17", source = { registry = "https://storage.googleapis.com/jax-releases/libtpu_releases.html" }, marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
-    { name = "libtpu", version = "0.0.32", source = { registry = "https://storage.googleapis.com/jax-releases/libtpu_releases.html" }, marker = "python_full_version >= '3.11' and sys_platform == 'linux'" },
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "optax" },
 ]
 
+[package.optional-dependencies]
+tpu = [
+    { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, extra = ["tpu"], marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
+    { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, extra = ["tpu"], marker = "python_full_version >= '3.11' and sys_platform == 'linux'" },
+    { name = "libtpu", version = "0.0.17", source = { registry = "https://storage.googleapis.com/jax-releases/libtpu_releases.html" }, marker = "python_full_version < '3.11' and sys_platform == 'linux'" },
+    { name = "libtpu", version = "0.0.32", source = { registry = "https://storage.googleapis.com/jax-releases/libtpu_releases.html" }, marker = "python_full_version >= '3.11' and sys_platform == 'linux'" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "flax" },
     { name = "jax" },
-    { name = "jax", extras = ["tpu"], marker = "sys_platform == 'linux'" },
+    { name = "jax", extras = ["tpu"], marker = "sys_platform == 'linux' and extra == 'tpu'" },
     { name = "jaxlib" },
-    { name = "libtpu", marker = "sys_platform == 'linux'" },
+    { name = "libtpu", marker = "sys_platform == 'linux' and extra == 'tpu'" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numpy" },
     { name = "optax" },
 ]
+provides-extras = ["tpu"]
 
 [[package]]
 name = "etils"

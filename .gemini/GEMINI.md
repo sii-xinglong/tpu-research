@@ -76,7 +76,16 @@ bash scripts/sync_code.sh gpu && sky exec $(cat .cluster_name_gpu) "export CUDA_
 ### Core Concepts & Patterns
 
 #### 1. Grid & Memory Hierarchy
-*   **Layout:** The Pallas TPU lowering currently requires that the last two dimensions of your block shape are divisible by 8 and 128 respectively, or be equal to the respective dimensions  of the overall array.
+*   **Layout (CRITICAL):** The Pallas TPU lowering requires that the **last two dimensions** of your block shape are **divisible by 8 and 128 respectively**, OR be **equal to the respective dimensions of the overall array**.
+    *   *Constraint:* `block_shape[-2] % 8 == 0` AND `block_shape[-1] % 128 == 0`.
+    *   *Exception:* If `block_shape[dim] == full_array_shape[dim]`, the divisibility requirement is waived for that dimension.
+    *   *Anti-Pattern:* **Do NOT reshape** arrays to add a trailing `1` dimension (e.g., changing `(..., D)` to `(..., D, 1)`) just to satisfy this. This leads to inefficient layouts and memory access patterns.
+    *   *Best Practice:* If your dimension `D` is not divisible by 128 (e.g., `HEAD_DIM=96`), set the **block size** for that dimension to be the full size `D`.
+        ```python
+        # Good: Block covers full dimension if not 128-aligned
+        # full_array_shape: (B, H, T, 96)
+        pl.BlockSpec(block_shape=(..., 128, 96), index_map=...)
+        ```
 
 *   **Grid Spec:** Use `pltpu.PrefetchScalarGridSpec` for automatic HBM<->VMEM management in simple cases.
     ```python
@@ -86,6 +95,23 @@ bash scripts/sync_code.sh gpu && sky exec $(cat .cluster_name_gpu) "export CUDA_
         in_specs=[pl.BlockSpec(memory_space=pltpu.VMEM, ...), ...],
         out_specs=[pl.BlockSpec(memory_space=pltpu.VMEM, ...), ...],
         scratch_shapes=[pltpu.VMEM(...)]
+    )
+    ```
+*   **BlockSpec Syntax:** Use explicit keyword arguments for `pl.BlockSpec` to prevent positional argument errors. The positional signature is `(block_shape, index_map)`, which is often counter-intuitive.
+    *   **Wrong:** `pl.BlockSpec(lambda i, j: (i, j), (128, 128))` (Passes lambda as shape!)
+    *   **Right:** `pl.BlockSpec(index_map=lambda i, j: (i, j), block_shape=(128, 128))`
+*   **Compiler Params:** Use `pltpu.CompilerParams` to control dimension semantics (e.g., parallel vs. arbitrary) and other compiler options.
+    ```python
+    compiler_params = pltpu.CompilerParams(
+        dimension_semantics=("parallel", "arbitrary", "arbitrary"),
+        # flags={"XLA_TPU_FORCE_LP_LLO_SCHEDULER": True}
+    )
+    # Usage in pallas_call:
+    pl.pallas_call(
+        kernel,
+        out_shape=...,
+        grid_spec=grid_spec,
+        compiler_params=compiler_params
     )
     ```
 *   **Manual Pipelining (Advanced):** For maximum performance, manage data movement manually to overlap Compute and DMA.

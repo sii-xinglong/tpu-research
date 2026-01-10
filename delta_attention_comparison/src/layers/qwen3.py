@@ -57,82 +57,151 @@ def jax_chunk_gated_delta_rule(
   g_c = g.reshape(batch_size, num_heads, num_chunks, chunk_size)
 
   mask = jnp.triu(jnp.ones((chunk_size, chunk_size), dtype=bool), k=0)
-
   g_cumsum = jnp.cumsum(g_c, axis=-1)
-  g_diff = jnp.expand_dims(g_cumsum, -1) - jnp.expand_dims(g_cumsum, -2)
-
-  g_diff_tril = jnp.tril(g_diff)
-  g_diff_exp = jnp.exp(g_diff_tril).astype(jnp.float32)
-  decay_mask = g_diff_exp 
-
-  prec = jax.lax.Precision.HIGHEST
-  attn = -jnp.matmul(k_beta_c, jnp.swapaxes(key_c, -1, -2), precision=prec) * decay_mask
-  attn = jnp.where(mask, 0.0, attn)
-
-  def inner_attn_body(i, attn_val):
-    indices = jnp.arange(chunk_size)
-    col_mask = indices < i
-    row = attn_val[..., i, :] * col_mask
-    sub_mask = jnp.expand_dims(indices < i, -1) & (indices < i)
-    sub = attn_val * sub_mask
-    row_exp = jnp.expand_dims(row, -1)
-    term = row_exp * sub
-    summed = jnp.sum(term, axis=-2)
-    update_val = row + summed
-    original_row = attn_val[..., i, :]
-    new_row = jnp.where(col_mask, update_val, original_row)
-    return attn_val.at[..., i, :].set(new_row)
-
-  attn = jax.lax.fori_loop(1, chunk_size, inner_attn_body, attn)
-
-  attn = attn + jnp.eye(chunk_size, dtype=attn.dtype)
-  value_intra = jnp.matmul(attn, v_beta_c, precision=prec)
-  k_cumdecay = jnp.matmul(attn, (k_beta_c * jnp.expand_dims(jnp.exp(g_cumsum), -1)), precision=prec)
+  
+  # --- FUSED SCAN PREPARATION ---
+  
+  # Prepare scan inputs (transpose to [NumChunks, Batch, Heads, Chunk, Dim])
+  # Inputs: query_c, key_c, k_beta_c, v_beta_c, g_cumsum
+  def to_scan(x): return jnp.transpose(x, (2, 0, 1, 3, 4))
+  def to_scan_4d(x): return jnp.transpose(x, (2, 0, 1, 3)) # For g_cumsum
 
   output_final_state = initial_state is not None
   if initial_state is None:
-    last_recurrent_state = jnp.zeros((batch_size, num_heads, k_head_dim, v_head_dim), dtype=value_intra.dtype)
+    last_recurrent_state = jnp.zeros((batch_size, num_heads, k_head_dim, v_head_dim), dtype=jnp.float32)
   else:
-    last_recurrent_state = initial_state.astype(value_intra.dtype)
+    last_recurrent_state = initial_state.astype(jnp.float32)
 
+  xs = (
+      to_scan(query_c),       # q_i
+      to_scan(key_c),         # k_i
+      to_scan(k_beta_c),      # k_beta_i
+      to_scan(v_beta_c),      # v_beta_i
+      to_scan_4d(g_cumsum)    # g_i
+  )
+  
   mask_inter = jnp.triu(jnp.ones((chunk_size, chunk_size), dtype=bool), k=1)
 
-  query_scan = jnp.transpose(query_c, (2, 0, 1, 3, 4))
-  key_scan = jnp.transpose(key_c, (2, 0, 1, 3, 4))
-  value_scan = jnp.transpose(value_intra, (2, 0, 1, 3, 4))
-  k_cumdecay_scan = jnp.transpose(k_cumdecay, (2, 0, 1, 3, 4))
-  g_scan = jnp.transpose(g_cumsum, (2, 0, 1, 3))
-  decay_mask_scan = jnp.transpose(decay_mask, (2, 0, 1, 3, 4))
-
-  xs = (query_scan, key_scan, value_scan, k_cumdecay_scan, g_scan, decay_mask_scan)
-
   def scan_body(prev_state, x):
-    q_i, k_i, v_i, k_cumdecay_i, g_i, decay_mask_i = x
-    last_recurrent_state = prev_state
+    q_i, k_i, k_beta_i, v_beta_i, g_i = x
     prec = jax.lax.Precision.HIGHEST
+    
+    # --- Local Chunk Computation ---
+    # Re-compute all intra-chunk terms locally to save memory
+    
+    # 1. Decay Mask (g_diff)
+    # g_i: (B, H, C)
+    g_diff = jnp.expand_dims(g_i, -1) - jnp.expand_dims(g_i, -2) # (B, H, C, C)
+    g_diff_tril = jnp.tril(g_diff)
+    g_diff_exp = jnp.exp(g_diff_tril).astype(jnp.float32)
+    decay_mask_i = g_diff_exp
+    
+    # 2. Local Attention
+    # attn = -k_beta @ k.T * decay
+    attn_i = -jnp.matmul(k_beta_i, jnp.swapaxes(k_i, -1, -2), precision=prec) * decay_mask_i
+    attn_i = jnp.where(mask, 0.0, attn_i)
+    
+    # 3. Iterative Correction (fori_loop)
+    # This logic is purely local to the chunk (C, C)
+    # We vmap it over Batch and Heads
+    def correct_attn_local(attn_val):
+        def inner_attn_body(i, val):
+            indices = jnp.arange(chunk_size)
+            col_mask = indices < i
+            row = val[i, :] * col_mask
+            sub_mask = (indices < i)[:, None] & (indices < i)[None, :]
+            sub = val * sub_mask
+            term = row[:, None] * sub
+            summed = jnp.sum(term, axis=0) # sum over rows? No axis=-2 means sum over cols of term?
+            # Original: row_exp (C, 1) * sub (C, C) -> term (C, C). Sum axis=-2 (rows) -> (C).
+            # Here inputs are (C, C).
+            # Let's match original carefully:
+            # row_exp = expand_dims(row, -1) -> (C, 1)
+            # term = row_exp * sub -> (C, C)
+            # summed = sum(term, axis=-2) -> (C) (summing over rows for each col? No axis -2 is rows)
+            
+            # Original code:
+            # row = attn_val[..., i, :] * col_mask
+            # ...
+            # row_exp = jnp.expand_dims(row, -1)
+            # term = row_exp * sub
+            # summed = jnp.sum(term, axis=-2)
+            
+            row_exp = jnp.expand_dims(row, -1)
+            term = row_exp * sub
+            summed = jnp.sum(term, axis=0) # (C, C) sum axis 0 -> (C)
+            
+            update_val = row + summed
+            original_row = val[i, :]
+            new_row = jnp.where(col_mask, update_val, original_row)
+            return val.at[i, :].set(new_row)
+            
+        return jax.lax.fori_loop(1, chunk_size, inner_attn_body, attn_val)
 
-    attn_i = jnp.matmul(q_i, jnp.swapaxes(k_i, -1, -2), precision=prec) * decay_mask_i
-    attn_i = jnp.where(mask_inter, 0.0, attn_i)
-
+    # vmap over B, H
+    attn_i = jax.vmap(jax.vmap(correct_attn_local))(attn_i)
+    
+    attn_i = attn_i + jnp.eye(chunk_size, dtype=attn_i.dtype)
+    
+    # 4. Intra-chunk Outputs
+    # value_intra = attn @ v_beta
+    v_i = jnp.matmul(attn_i, v_beta_i, precision=prec)
+    
+    # k_cumdecay = attn @ (k_beta * exp(g))
+    k_cumdecay_i = jnp.matmul(attn_i, (k_beta_i * jnp.expand_dims(jnp.exp(g_i), -1)), precision=prec)
+    
+    # --- Recurrent Update ---
+    
+    # v_new calculation
     v_prime = jnp.matmul(k_cumdecay_i, last_recurrent_state, precision=prec)
-    v_new = v_i - v_prime
-
+    v_new = v_i - v_prime # (B, H, C, D)
+    
+    # Inter-chunk Attention
+    # attn_inter = q * exp(g) @ state
     g_i_exp = jnp.exp(g_i)
     attn_inter = jnp.matmul(q_i * jnp.expand_dims(g_i_exp, -1), last_recurrent_state, precision=prec)
-
-    core_attn_out_i = attn_inter + jnp.matmul(attn_i, v_new, precision=prec)
-
+    
+    # Core Output
+    # core = attn_inter + (attn_local @ v_new)
+    # Need attn_local for output.
+    # Original: attn_i = q @ k.T * decay.
+    # Note: attn_i calculated above was for correction.
+    # The attn_i used for v_new (intra) is q @ k.T?
+    # No, original code had `attn` (corrected) used for `value_intra`.
+    # And `attn_i` (in scan body) = `q @ k.T * decay`.
+    # These are different!
+    # The `attn` pre-calculated was `K @ K.T`. (The decay matrix logic).
+    
+    # Let's re-read original:
+    # attn (pre-calc) = -k_beta @ k.T * decay ... then corrected.
+    # value_intra = attn @ v_beta
+    # k_cumdecay = attn @ (k_beta * exp(g))
+    
+    # THEN in scan_body:
+    # attn_i = q @ k.T * decay
+    # core = attn_inter + attn_i @ v_new
+    
+    # So we need to calculate `attn_q` (q@k.T) separately inside scan.
+    
+    # attn_q for output:
+    attn_q = jnp.matmul(q_i, jnp.swapaxes(k_i, -1, -2), precision=prec) * decay_mask_i
+    attn_q = jnp.where(mask_inter, 0.0, attn_q)
+    
+    core_attn_out_i = attn_inter + jnp.matmul(attn_q, v_new, precision=prec)
+    
+    # State Update
     g_i_last_exp = jnp.exp(g_i[..., -1, None, None])
     new_last_recurrent_state = last_recurrent_state * g_i_last_exp
 
-    g_diff_exp = jnp.expand_dims(jnp.exp(jnp.expand_dims(g_i[..., -1], -1) - g_i), -1)
-    k_i_g_diff = k_i * g_diff_exp
+    g_diff_exp_last = jnp.expand_dims(jnp.exp(jnp.expand_dims(g_i[..., -1], -1) - g_i), -1)
+    k_i_g_diff = k_i * g_diff_exp_last
 
     update_term = jnp.matmul(jnp.swapaxes(k_i_g_diff, -1, -2), v_new, precision=prec)
     new_last_recurrent_state = new_last_recurrent_state + update_term
 
     return new_last_recurrent_state, core_attn_out_i
 
+  scan_body = jax.checkpoint(scan_body)
   final_state, core_attn_out_stacked = jax.lax.scan(scan_body, last_recurrent_state, xs)
 
   core_attn_out = jnp.transpose(core_attn_out_stacked, (1, 2, 0, 3, 4))

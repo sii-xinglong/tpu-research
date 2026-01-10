@@ -12,7 +12,7 @@ import jax.numpy as jnp
 # Add parent directory to path to import src
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.layers.kimi_delta_attention import analyze_kimi_operators
+from src.layers.kimi_delta_attention import analyze_kimi_operators, analyze_kimi_memory
 from src.layers.qwen3 import analyze_qwen_operators
 
 # --- Hardware Constants (Default: TPU v5e-like) ---
@@ -73,6 +73,7 @@ class OperatorStats:
     flops: float
     bytes: float
     color: str
+    peak_bytes: float = 0.0
 
     @property
     def intensity(self):
@@ -91,38 +92,85 @@ class OperatorStats:
 
 # --- Analysis Logic ---
 
-def analyze_kimi(batch_size: int, seq_len: int, cfg: ModelConfig) -> List[OperatorStats]:
+def analyze_kimi(batch_size: int, seq_len: int, cfg: ModelConfig, hw: Hardware = TPU_V6E) -> List[OperatorStats]:
     print(f"Running JAX Roofline analysis for Kimi (B={batch_size}, L={seq_len})...")
     
     # Map colors to expected operator names
     colors = {
-        "Kimi: QKV Proj": 'red',
-        "Kimi: Gate Projs": 'orange',
-        "Kimi: Conv1D": 'yellow',
-        "Kimi: Out Proj": 'blue',
-        # Breakdown
-        "Kimi: Core Prep": 'lightgreen',
-        # "Kimi: Core Init": 'darkred', # Removed for fine-grained
-        # "Kimi: Init Decay": 'orange', # Optimized out
-        "Kimi: Init A_raw (Opt)": 'yellow',
-        "Kimi: Init A_raw (Opt Atomic)": 'lightgray',
-        "Kimi: Init A_inv": 'darkred', # Likely hotspot
-        "Kimi: Init A_inv (Atomic)": 'darkgray',
-        "Kimi: Init U/W": 'pink',
-        "Kimi: Core Scan": 'purple',
-        "Kimi: Core Post": 'lightblue'
+        "Kimi: Q Proj": 'red', "Kimi: Q Proj (Bwd)": 'darkred',
+        "Kimi: K Proj": 'red', "Kimi: K Proj (Bwd)": 'darkred',
+        "Kimi: V Proj": 'red', "Kimi: V Proj (Bwd)": 'darkred',
+        "Kimi: Beta Proj": 'orange', "Kimi: Beta Proj (Bwd)": 'darkorange',
+        "Kimi: F_A Proj": 'orange', "Kimi: F_A Proj (Bwd)": 'darkorange',
+        "Kimi: F_B Proj": 'orange', "Kimi: F_B Proj (Bwd)": 'darkorange',
+        "Kimi: G_A Proj": 'orange', "Kimi: G_A Proj (Bwd)": 'darkorange',
+        "Kimi: G_B Proj": 'orange', "Kimi: G_B Proj (Bwd)": 'darkorange',
+        "Kimi: Q Conv": 'yellow', "Kimi: Q Conv (Bwd)": 'olive',
+        "Kimi: K Conv": 'yellow', "Kimi: K Conv (Bwd)": 'olive',
+        "Kimi: V Conv": 'yellow', "Kimi: V Conv (Bwd)": 'olive',
+        "Kimi: Out Proj": 'blue', "Kimi: Out Proj (Bwd)": 'darkblue',
+        "Kimi: Core": 'purple', "Kimi: Core (Bwd)": 'indigo',
+        "Kimi: FULL (Fwd)": 'cyan', "Kimi: FULL (Bwd)": 'darkcyan',
     }
 
     raw_stats = analyze_kimi_operators(cfg, batch_size, seq_len, chunk_size=cfg.chunk_size)
     
     stats = []
+    fwd_bytes = 0
+    bwd_bytes = 0
+    fwd_time = 0
+    bwd_time = 0
+    
+    full_fwd_peak = 0
+    full_bwd_peak = 0
+    
+    print(f"{'Operator':<25} | {'FLOPs':<10} | {'Traffic':<10} | {'Peak Mem':<10} | {'Time (us)':<10} | {'Bound'}")
+
     for item in raw_stats:
-        stats.append(OperatorStats(
+        s = OperatorStats(
             name=item['name'],
             flops=item['flops'],
             bytes=item['bytes'],
-            color=colors.get(item['name'], 'gray')
-        ))
+            color=colors.get(item['name'], 'gray'),
+            peak_bytes=item.get('peak_bytes', 0.0)
+        )
+        stats.append(s)
+        
+        if "FULL" in s.name:
+            if "(Bwd)" in s.name: full_bwd_peak = s.peak_bytes
+            else: full_fwd_peak = s.peak_bytes
+            continue # Don't print full in the operator list, use for summary
+
+        t_sec = s.time_sec(hw)
+        print(f"{s.name:<25} | {s.flops:.2e}   | {s.bytes:.2e}   | {s.peak_bytes/1e6:7.1f} MB | {t_sec*1e6:.2f}     | {s.bound(hw)}")
+
+        if "(Bwd)" in s.name:
+            bwd_bytes += s.bytes
+            bwd_time += t_sec
+        else:
+            fwd_bytes += s.bytes
+            fwd_time += t_sec
+            
+    print("-" * 100)
+    print(f"Total Forward Memory Traffic: {fwd_bytes/1e9:.4f} GB")
+    print(f"Total Forward Time:           {fwd_time*1e6:.2f} us")
+    print(f"Total Backward Memory Traffic: {bwd_bytes/1e9:.4f} GB")
+    print(f"Total Backward Time:           {bwd_time*1e6:.2f} us")
+    print(f"Total Time (Fwd+Bwd):          {(fwd_time + bwd_time)*1e6:.2f} us")
+    
+    print("-" * 100)
+    print("XLA Peak Memory Usage (Automated):")
+    print(f"  Inference (Fwd) Peak: {full_fwd_peak/1e6:.2f} MB")
+    print(f"  Training (Bwd) Peak:  {full_bwd_peak/1e9:.4f} GB")
+    
+    mem_stats = analyze_kimi_memory(cfg, batch_size, seq_len)
+    print("-" * 100)
+    print("Theoretical Memory Estimation (Manual):")
+    print(f"  Parameters:        {mem_stats['param_bytes']/1e6:.2f} MB")
+    print(f"  KV State (Recur):  {mem_stats['state_bytes']/1e6:.2f} MB")
+    print(f"  Activation (Train):{mem_stats['activation_bytes']/1e9:.4f} GB")
+    print("-" * 100)
+
     return stats
 
 def analyze_qwen(batch_size: int, seq_len: int, cfg: ModelConfig) -> List[OperatorStats]:
@@ -242,16 +290,8 @@ def main():
         
         # Analyze Kimi
         print(">>> KimiDeltaAttention Analysis")
-        kimi_stats = analyze_kimi(b, l, cfg)
-        total_kimi_time = 0
-        print(f"{'Operator':<20} | {'FLOPs':<10} | {'Bytes':<10} | {'Intensity':<10} | {'Time (us)':<10} | {'Bound'}")
-        for s in kimi_stats:
-            t_sec = s.time_sec(hw)
-            total_kimi_time += t_sec
-            print(f"{s.name:<20} | {s.flops:.2e}   | {s.bytes:.2e}   | {s.intensity:.2f}       | {t_sec*1e6:.2f}     | {s.bound(hw)}")
-        print(f"Total Theoretical Time: {total_kimi_time*1e6:.2f} us")
-        print("-" * 60)
-
+        kimi_stats = analyze_kimi(b, l, cfg, hw=hw)
+        
         # Analyze Qwen
         print(">>> Qwen3NextGatedDeltaNet Analysis")
         qwen_stats = analyze_qwen(b, l, cfg)
